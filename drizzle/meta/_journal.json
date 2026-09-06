@@ -15,6 +15,13 @@
       "when": 1788533078261,
       "tag": "0001_delivery_cancelled",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788685649956,
+      "tag": "0002_workable_dakota_north",
+      "breakpoints": true
     }
   ]
 }

@@ -81,6 +81,15 @@ export function int(value: unknown, field: string, min: number, max: number): nu
   return parsed;
 }
 
+/** Parses an ISO datetime that must name an instant strictly after now. */
+export function futureDate(value: unknown, field: string): Date {
+  if (typeof value !== "string" || !value) return badRequest(`${field} is required`);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return badRequest(`${field} is not a valid date`);
+  if (date.getTime() <= Date.now()) return badRequest(`${field} must be in the future`);
+  return date;
+}
+
 export function uuidList(value: unknown, field: string): string[] {
   if (!Array.isArray(value)) return badRequest(`${field} must be an array`);
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

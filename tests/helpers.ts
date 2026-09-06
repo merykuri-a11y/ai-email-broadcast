@@ -43,7 +43,8 @@ export async function createCampaign(options: {
   subject?: string;
   html?: string;
   listIds?: string[];
-  status?: "DRAFT" | "QUEUED" | "SENDING" | "PAUSED" | "COMPLETED" | "CANCELLED";
+  status?: "DRAFT" | "SCHEDULED" | "QUEUED" | "SENDING" | "PAUSED" | "COMPLETED" | "CANCELLED";
+  scheduledAt?: Date;
 } = {}): Promise<string> {
   const [campaign] = await db
     .insert(campaigns)
@@ -53,6 +54,7 @@ export async function createCampaign(options: {
       compiledHtml: options.html ?? "<p>Hi {{firstName}}</p>",
       contentHtml: options.html ?? "<p>Hi {{firstName}}</p>",
       status: options.status ?? "DRAFT",
+      scheduledAt: options.scheduledAt ?? null,
     })
     .returning({ id: campaigns.id });
 

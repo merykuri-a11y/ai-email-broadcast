@@ -11,6 +11,7 @@ type CampaignRow = {
   subject: string;
   status: string;
   createdAt: string;
+  scheduledAt: string | null;
   startedAt: string | null;
   completedAt: string | null;
   totalRecipients: number;
@@ -78,7 +79,12 @@ export default function CampaignsClient() {
                       <Link href={`/campaigns/${row.id}`} className="font-medium hover:underline">{row.name}</Link>
                       <p className="hint line-clamp-1">{row.subject || "No subject"}</p>
                     </td>
-                    <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
+                    <td className="px-3 py-2">
+                      <StatusBadge status={row.status} />
+                      {row.status === "SCHEDULED" ? (
+                        <p className="hint mt-1 whitespace-nowrap">{formatDate(row.scheduledAt)}</p>
+                      ) : null}
+                    </td>
                     <td className="px-3 py-2 text-right tabular-nums">{row.totalRecipients}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{row.queued + row.sending}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{row.sent}</td>

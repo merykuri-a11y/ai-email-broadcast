@@ -18,6 +18,7 @@ export type CampaignDraft = {
   status: string;
   totalRecipients: number;
   createdAt: string;
+  scheduledAt: string | null;
   startedAt: string | null;
   completedAt: string | null;
 };
@@ -38,7 +39,11 @@ const STEPS = ["Compose", "Recipients", "Preview", "Send"] as const;
 
 export default function CampaignWizard({
   initial, initialListIds, onQueued,
-}: { initial: CampaignDraft; initialListIds: string[]; onQueued: () => void }) {
+}: {
+  initial: CampaignDraft;
+  initialListIds: string[];
+  onQueued: (status: string, scheduledAt?: string) => void;
+}) {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState(initial);
@@ -137,7 +142,7 @@ export default function CampaignWizard({
           draft={draft}
           audience={audience}
           lists={lists.filter((l) => listIds.includes(l.id))}
-          onQueued={() => { onQueued(); router.refresh(); }}
+          onQueued={(status, scheduledAt) => { onQueued(status, scheduledAt); router.refresh(); }}
           onError={setError}
         />
       )}
@@ -388,29 +393,88 @@ function PreviewStep({
 
 /* --------------------------------------------------------------- step: 4 */
 
+function formatDateInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Default date/time inputs to an hour from now, in the browser's own timezone. */
+function defaultScheduleParts(): { date: string; time: string } {
+  const soon = new Date(Date.now() + 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return { date: formatDateInput(soon), time: `${pad(soon.getHours())}:${pad(soon.getMinutes())}` };
+}
+
+/**
+ * Combines the local-timezone date/time inputs into an unambiguous instant.
+ * `new Date("YYYY-MM-DDTHH:mm")` (no zone suffix) is specified to parse as
+ * local time, so `.toISOString()` below yields the correct UTC instant
+ * regardless of which timezone the browser is in.
+ */
+function parseLocalDateTime(date: string, time: string): Date | null {
+  if (!date || !time) return null;
+  const parsed = new Date(`${date}T${time}`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isNotInFuture(date: Date): boolean {
+  return date.getTime() <= Date.now();
+}
+
 function SendStep({
   draft, audience, lists, onQueued, onError,
 }: {
   draft: CampaignDraft;
   audience: Audience | null;
   lists: List[];
-  onQueued: () => void;
+  onQueued: (status: string, scheduledAt?: string) => void;
   onError: (m: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [when, setWhen] = useState<"now" | "later">("now");
+  const [parts, setParts] = useState(defaultScheduleParts);
+  const [localError, setLocalError] = useState<string | null>(null);
 
-  const send = async () => {
+  const scheduledDate = when === "later" ? parseLocalDateTime(parts.date, parts.time) : null;
+
+  const submit = async () => {
+    setLocalError(null);
+
+    if (when === "later") {
+      if (!scheduledDate) {
+        setLocalError("Choose a date and time.");
+        return;
+      }
+      if (isNotInFuture(scheduledDate)) {
+        setLocalError("Pick a date and time in the future.");
+        return;
+      }
+    }
+
     setBusy(true);
     try {
-      await api(`/api/campaigns/${draft.id}/send`, { method: "POST" });
+      if (when === "now") {
+        await api(`/api/campaigns/${draft.id}/send`, { method: "POST" });
+        onQueued("QUEUED");
+      } else {
+        const isoScheduledAt = scheduledDate!.toISOString();
+        await api(`/api/campaigns/${draft.id}/schedule`, {
+          method: "POST",
+          body: JSON.stringify({ scheduledAt: isoScheduledAt }),
+        });
+        onQueued("SCHEDULED", isoScheduledAt);
+      }
       setConfirmOpen(false);
-      onQueued();
     } catch (err) {
-      onError(err instanceof Error ? err.message : "Could not queue the campaign");
+      const message = err instanceof Error ? err.message : "Could not queue the campaign";
+      setLocalError(message);
+      onError(message);
       setBusy(false);
     }
   };
+
+  const readyToConfirm = Boolean(audience) && audience!.finalRecipients > 0 && Boolean(draft.subject.trim());
 
   return (
     <div className="grid gap-4">
@@ -431,29 +495,85 @@ function SendStep({
         </dl>
       </section>
 
+      <section className="card p-4">
+        <h2 className="font-medium">When should this campaign be sent?</h2>
+        <div className="mt-3 grid gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" name="when" checked={when === "now"} onChange={() => setWhen("now")} />
+            Send now
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" name="when" checked={when === "later"} onChange={() => setWhen("later")} />
+            Schedule for later
+          </label>
+          {when === "later" ? (
+            <div className="ml-6 flex flex-wrap items-end gap-3">
+              <div>
+                <label className="label" htmlFor="scheduleDate">Date</label>
+                <input
+                  id="scheduleDate"
+                  className="input"
+                  type="date"
+                  value={parts.date}
+                  min={formatDateInput(new Date())}
+                  onChange={(e) => setParts((p) => ({ ...p, date: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="scheduleTime">Time</label>
+                <input
+                  id="scheduleTime"
+                  className="input"
+                  type="time"
+                  value={parts.time}
+                  onChange={(e) => setParts((p) => ({ ...p, time: e.target.value }))}
+                />
+              </div>
+              <p className="hint">
+                {scheduledDate ? `That's ${scheduledDate.toLocaleString()} your time.` : "Uses your device's timezone."}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      {localError ? <Alert kind="error">{localError}</Alert> : null}
+
       <div>
         <button
           className="btn btn-primary"
-          disabled={busy || !audience || audience.finalRecipients === 0 || !draft.subject.trim()}
+          disabled={busy || !readyToConfirm}
           onClick={() => setConfirmOpen(true)}
         >
-          Queue campaign
+          {when === "now" ? "Queue campaign" : "Schedule campaign"}
         </button>
         {audience?.finalRecipients === 0 ? (
           <p className="hint mt-2">No recipients — select at least one non-empty list.</p>
         ) : null}
       </div>
 
-      <Modal open={confirmOpen} title="Queue this campaign?" onClose={() => setConfirmOpen(false)}>
+      <Modal
+        open={confirmOpen}
+        title={when === "now" ? "Queue this campaign?" : "Schedule this campaign?"}
+        onClose={() => setConfirmOpen(false)}
+      >
         <div className="grid gap-3 text-sm">
+          {localError ? <Alert kind="error">{localError}</Alert> : null}
           <p>
-            This queues <strong>{audience?.finalRecipients ?? 0}</strong> emails. Sending happens in the
-            background at your configured rate, and you can pause or cancel at any point — but messages
-            already handed to the SMTP server cannot be recalled.
+            {when === "now" ? (
+              <>This queues <strong>{audience?.finalRecipients ?? 0}</strong> emails right away.</>
+            ) : (
+              <>
+                This queues <strong>{audience?.finalRecipients ?? 0}</strong> emails to start sending at{" "}
+                <strong>{scheduledDate ? scheduledDate.toLocaleString() : "—"}</strong>.
+              </>
+            )}{" "}
+            Sending happens in the background at your configured rate, and you can pause, reschedule, or
+            cancel at any point — but messages already handed to the SMTP server cannot be recalled.
           </p>
           <div className="flex gap-2">
-            <button className="btn btn-primary" disabled={busy} onClick={send}>
-              {busy ? "Queueing…" : "Yes, queue it"}
+            <button className="btn btn-primary" disabled={busy} onClick={submit}>
+              {busy ? "Saving…" : when === "now" ? "Yes, queue it" : "Yes, schedule it"}
             </button>
             <button className="btn" onClick={() => setConfirmOpen(false)} disabled={busy}>Cancel</button>
           </div>

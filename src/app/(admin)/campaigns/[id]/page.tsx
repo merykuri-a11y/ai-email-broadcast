@@ -32,6 +32,7 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
         status: campaign.status,
         totalRecipients: campaign.totalRecipients,
         createdAt: campaign.createdAt.toISOString(),
+        scheduledAt: campaign.scheduledAt?.toISOString() ?? null,
         startedAt: campaign.startedAt?.toISOString() ?? null,
         completedAt: campaign.completedAt?.toISOString() ?? null,
       }}

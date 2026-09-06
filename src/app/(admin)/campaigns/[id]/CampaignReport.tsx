@@ -120,7 +120,7 @@ export default function CampaignReport({
         <div className="mt-2 grid gap-1 text-xs sm:grid-cols-3" style={{ color: "var(--color-muted)" }}>
           <span>Created {formatDate(campaign?.createdAt)}</span>
           <span>Started {formatDate(campaign?.startedAt)}</span>
-          <span>Completed {formatDate(campaign?.completedAt)}</span>
+          <span>{currentStatus === "CANCELLED" ? "Cancelled" : "Completed"} {formatDate(campaign?.completedAt)}</span>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           {(currentStatus === "QUEUED" || currentStatus === "SENDING") ? (

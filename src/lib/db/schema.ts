@@ -20,6 +20,7 @@ export const smtpSecurityEnum = pgEnum("smtp_security", ["none", "starttls", "tl
 
 export const campaignStatusEnum = pgEnum("campaign_status", [
   "DRAFT",
+  "SCHEDULED",
   "QUEUED",
   "SENDING",
   "PAUSED",
@@ -156,6 +157,13 @@ export const campaigns = pgTable("campaigns", {
   textBodyIsCustom: boolean("text_body_is_custom").notNull().default(false),
   status: campaignStatusEnum("status").notNull().default("DRAFT"),
   totalRecipients: integer("total_recipients").notNull().default(0),
+  /**
+   * When set, the campaign starts automatically once this instant passes —
+   * see `promoteScheduledCampaigns` in queue.ts. Stored as an absolute instant
+   * (timestamptz), never a wall-clock string, so it survives DST and reads
+   * back correctly regardless of the viewer's or server's timezone.
+   */
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   startedAt: timestamp("started_at", { withTimezone: true }),
@@ -163,6 +171,8 @@ export const campaigns = pgTable("campaigns", {
 }, (t) => [
   index("campaigns_status_idx").on(t.status),
   index("campaigns_created_at_idx").on(t.createdAt),
+  // Drives the worker's due-campaign promotion query.
+  index("campaigns_status_scheduled_at_idx").on(t.status, t.scheduledAt),
 ]);
 
 export const campaignLists = pgTable("campaign_lists", {

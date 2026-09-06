@@ -63,6 +63,7 @@ export function EmptyState({ title, children }: { title: string; children?: Reac
 
 const STATUS_COLORS: Record<string, string> = {
   DRAFT: "text-zinc-600 dark:text-zinc-300",
+  SCHEDULED: "text-indigo-700 dark:text-indigo-400",
   QUEUED: "text-amber-700 dark:text-amber-400",
   SENDING: "text-blue-700 dark:text-blue-400",
   COMPLETED: "text-emerald-700 dark:text-emerald-400",

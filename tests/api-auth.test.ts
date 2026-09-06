@@ -76,6 +76,15 @@ describe("admin endpoints require a session", () => {
     }
   });
 
+  it("POST /api/campaigns/:id/{schedule,reschedule}", async () => {
+    const scheduledAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const schedule = await import("@/app/api/campaigns/[id]/schedule/route");
+    const reschedule = await import("@/app/api/campaigns/[id]/reschedule/route");
+    for (const mod of [schedule, reschedule]) {
+      expect((await mod.POST(jsonRequest({ scheduledAt }), ctx())).status).toBe(401);
+    }
+  });
+
   it("GET /api/campaigns/:id/recipients and /failures", async () => {
     const recipients = await import("@/app/api/campaigns/[id]/recipients/route");
     const failures = await import("@/app/api/campaigns/[id]/failures/route");

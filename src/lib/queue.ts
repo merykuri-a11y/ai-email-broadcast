@@ -230,6 +230,27 @@ export async function filterSuppressed(emails: string[]): Promise<Set<string>> {
   return new Set(rows.map((r) => r.email_normalized));
 }
 
+/**
+ * Activates due scheduled campaigns: SCHEDULED -> QUEUED for every campaign
+ * whose `scheduledAt` has passed.
+ *
+ * The `WHERE status = 'SCHEDULED'` guard is what makes this safe to call from
+ * every tick, on every instance, without ever activating a campaign twice: a
+ * second concurrent call (or the next tick, or a tick after a restart) only
+ * matches rows that are *still* SCHEDULED, so a campaign already flipped to
+ * QUEUED by another invocation is simply not returned again. No separate lock
+ * or in-memory guard is needed — the same pattern `claimRecipients` uses.
+ */
+export async function promoteScheduledCampaigns(): Promise<string[]> {
+  const rows = await sql<{ id: string }[]>`
+    UPDATE campaigns
+    SET status = 'QUEUED', updated_at = now()
+    WHERE status = 'SCHEDULED' AND scheduled_at <= now()
+    RETURNING id
+  `;
+  return rows.map((r) => r.id);
+}
+
 /** Flips QUEUED campaigns that now have in-flight work to SENDING. */
 export async function markCampaignsStarted(campaignIds: string[]): Promise<void> {
   if (campaignIds.length === 0) return;

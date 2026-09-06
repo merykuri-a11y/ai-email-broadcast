@@ -14,6 +14,7 @@ export async function GET() {
         subject: campaigns.subject,
         status: campaigns.status,
         createdAt: campaigns.createdAt,
+        scheduledAt: campaigns.scheduledAt,
         startedAt: campaigns.startedAt,
         completedAt: campaigns.completedAt,
         totalRecipients: campaigns.totalRecipients,

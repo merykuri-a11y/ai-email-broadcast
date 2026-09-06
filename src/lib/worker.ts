@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Transporter } from "nodemailer";
+import { eq } from "drizzle-orm";
 import { db, sql } from "./db";
-import { suppressions } from "./db/schema";
+import { campaigns, suppressions } from "./db/schema";
 import { getSmtpConfig, appUrl, type ResolvedSmtpConfig } from "./settings";
 import { createTransport, isPermanentSmtpError, sanitizeErrorMessage, sendMessage } from "./mailer";
 import { buildMessage } from "./message-builder";
+import { generateRecipients } from "./campaign-recipients";
 import {
   claimRecipients,
   countSentInLastHour,
@@ -15,6 +17,7 @@ import {
   markFailed,
   markSent,
   markSuppressed,
+  promoteScheduledCampaigns,
   pruneSendLog,
   refundSendAttempts,
   reclaimExpiredLeases,
@@ -31,6 +34,7 @@ export type TickResult = {
   retried: number;
   suppressed: number;
   reclaimed: number;
+  activatedScheduled: number;
   completedCampaigns: number;
   rateLimited: boolean;
   durationMs: number;
@@ -58,11 +62,15 @@ export async function runTick(options: { timeBudgetMs?: number } = {}): Promise<
 
   const result: TickResult = {
     claimed: 0, sent: 0, failed: 0, retried: 0, suppressed: 0,
-    reclaimed: 0, completedCampaigns: 0, rateLimited: false,
+    reclaimed: 0, activatedScheduled: 0, completedCampaigns: 0, rateLimited: false,
     durationMs: 0,
   };
 
   result.reclaimed = await reclaimExpiredLeases();
+
+  // Activation doesn't touch SMTP, so it runs even while mail sending is
+  // unconfigured — the campaign is ready to go the moment it is.
+  result.activatedScheduled = await activateDueCampaigns();
 
   const config = await getSmtpConfig();
   if (!config) {
@@ -138,6 +146,32 @@ export async function runTick(options: { timeBudgetMs?: number } = {}): Promise<
   await pruneSendLog().catch(() => undefined);
   result.durationMs = Date.now() - startedAt;
   return result;
+}
+
+/**
+ * Promotes every due SCHEDULED campaign to QUEUED and materializes its queue,
+ * exactly like the "Send now" endpoint does — scheduling only decides *when*
+ * a campaign enters the same rate-limited pipeline, never how it is sent.
+ *
+ * Runs on every tick, so it is what makes scheduling durable: there is no
+ * timer anywhere, only a row in `campaigns` and this check re-running on
+ * whichever process (or however many) happen to be ticking.
+ */
+async function activateDueCampaigns(): Promise<number> {
+  const dueIds = await promoteScheduledCampaigns();
+  for (const id of dueIds) {
+    const generated = await generateRecipients(id);
+    if (generated.total === 0) {
+      // Nothing to send: there is no admin watching this transition happen,
+      // so leaving it stuck QUEUED forever (never claimed, never finalized)
+      // would be worse than closing it out immediately.
+      await db
+        .update(campaigns)
+        .set({ status: "COMPLETED", completedAt: new Date(), updatedAt: new Date() })
+        .where(eq(campaigns.id, id));
+    }
+  }
+  return dueIds.length;
 }
 
 type BatchOutcome = { sent: number; failed: number; retried: number; abort: boolean; abortReason?: string };
