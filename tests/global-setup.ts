@@ -11,7 +11,10 @@ import "./env";
  */
 export default async function setup() {
   await ensureTestDatabase();
-  execFileSync("npx", ["tsx", "scripts/migrate.ts"], { stdio: "inherit", env: { ...process.env } });
+  // shell: true so this resolves on Windows, where "npx" is really "npx.cmd"
+  // and execFileSync won't find it via PATH otherwise. Safe here: the
+  // argument list is fixed, never derived from external input.
+  execFileSync("npx", ["tsx", "scripts/migrate.ts"], { stdio: "inherit", env: { ...process.env }, shell: true });
 }
 
 /** Creates the test database if it does not exist, so a fresh clone just works. */

@@ -122,9 +122,11 @@ describe("POST /api/campaigns/:id/schedule", () => {
     // in summer) instead of a bare "Z" string.
     const plusTwo = new Date(future.getTime() + 2 * 60 * 60 * 1000);
     const pad = (n: number) => String(n).padStart(2, "0");
+    const pad3 = (n: number) => String(n).padStart(3, "0");
     const offsetIso =
       `${plusTwo.getUTCFullYear()}-${pad(plusTwo.getUTCMonth() + 1)}-${pad(plusTwo.getUTCDate())}` +
-      `T${pad(plusTwo.getUTCHours())}:${pad(plusTwo.getUTCMinutes())}:${pad(plusTwo.getUTCSeconds())}+02:00`;
+      `T${pad(plusTwo.getUTCHours())}:${pad(plusTwo.getUTCMinutes())}:${pad(plusTwo.getUTCSeconds())}` +
+      `.${pad3(plusTwo.getUTCMilliseconds())}+02:00`;
 
     const response = await scheduleCampaign(jsonRequest({ scheduledAt: offsetIso }), ctx(campaignId));
     expect(response.status).toBe(200);
@@ -157,12 +159,94 @@ describe("POST /api/campaigns/:id/reschedule", () => {
     expect(response.status).toBe(400);
   });
 
-  it("refuses to reschedule once processing has already started", async () => {
-    const campaignId = await createCampaign({ status: "QUEUED" });
-    const future = new Date(Date.now() + 60 * 60 * 1000);
+  it.each(["QUEUED", "SENDING", "COMPLETED", "CANCELLED"] as const)(
+    "refuses to reschedule a campaign that is %s",
+    async (status) => {
+      const campaignId = await createCampaign({ status });
+      const future = new Date(Date.now() + 60 * 60 * 1000);
 
-    const response = await rescheduleCampaign(jsonRequest({ scheduledAt: future.toISOString() }), ctx(campaignId));
-    expect(response.status).toBe(409);
+      const response = await rescheduleCampaign(jsonRequest({ scheduledAt: future.toISOString() }), ctx(campaignId));
+      expect(response.status).toBe(409);
+      expect((await getCampaign(campaignId)).status).toBe(status);
+    },
+  );
+
+  it("stops the old scheduled time from activating the campaign once rescheduled", async () => {
+    const campaignId = await draftCampaignWithRecipient();
+    await scheduleCampaign(jsonRequest({ scheduledAt: new Date(Date.now() + 60_000).toISOString() }), ctx(campaignId));
+
+    // Let the original instant fall into the past, as if the worker were
+    // about to pick it up, then push it back out before any tick runs.
+    await sql`UPDATE campaigns SET scheduled_at = now() - interval '1 minute' WHERE id = ${campaignId}`;
+    const pushedOut = new Date(Date.now() + 60 * 60 * 1000);
+    const response = await rescheduleCampaign(jsonRequest({ scheduledAt: pushedOut.toISOString() }), ctx(campaignId));
+    expect(response.status).toBe(200);
+
+    const result = await runTick({ timeBudgetMs: 5_000 });
+
+    expect(result.activatedScheduled).toBe(0);
+    expect((await getCampaign(campaignId)).status).toBe("SCHEDULED");
+    expect(smtp.messages).toHaveLength(0);
+  });
+
+  it("automatic activation uses the new time once the campaign has been rescheduled", async () => {
+    const campaignId = await draftCampaignWithRecipient("rescheduled@example.test");
+    await scheduleCampaign(
+      jsonRequest({ scheduledAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
+      ctx(campaignId),
+    );
+    await rescheduleCampaign(jsonRequest({ scheduledAt: new Date(Date.now() + 60_000).toISOString() }), ctx(campaignId));
+
+    // Neither the original far-future time nor "now" is due yet.
+    expect((await runTick({ timeBudgetMs: 5_000 })).activatedScheduled).toBe(0);
+    expect((await getCampaign(campaignId)).status).toBe("SCHEDULED");
+
+    // Fast-forward to the rescheduled instant and confirm it — not the
+    // original one — is what drives activation.
+    await sql`UPDATE campaigns SET scheduled_at = now() - interval '1 minute' WHERE id = ${campaignId}`;
+    const result = await runTick({ timeBudgetMs: 10_000 });
+
+    expect(result.activatedScheduled).toBe(1);
+    expect(smtp.messages.flatMap((m) => m.to)).toEqual(["rescheduled@example.test"]);
+    expect((await getCampaign(campaignId)).status).toBe("COMPLETED");
+  });
+
+  it("never double-activates when a reschedule races an overdue tick", async () => {
+    const listId = await createList("Test list");
+    for (let i = 0; i < 5; i++) await addContact(listId, `racer${i}@example.test`);
+    const campaignId = await createCampaign({
+      status: "SCHEDULED",
+      scheduledAt: new Date(Date.now() - 1000),
+      listIds: [listId],
+    });
+    const pushedOut = new Date(Date.now() + 60 * 60 * 1000);
+
+    // Both requests race the same row: the reschedule's conditional UPDATE
+    // (status = 'SCHEDULED') and the tick's (status = 'SCHEDULED' AND
+    // scheduled_at <= now()) can only ever have one winner under Postgres's
+    // read-committed row locking, so exactly one of the two takes effect.
+    const [rescheduleResponse, tickResult] = await Promise.all([
+      rescheduleCampaign(jsonRequest({ scheduledAt: pushedOut.toISOString() }), ctx(campaignId)),
+      runTick({ timeBudgetMs: 10_000 }),
+    ]);
+
+    const campaign = await getCampaign(campaignId);
+    if (rescheduleResponse.status === 200) {
+      // Reschedule won: the tick must not have touched this campaign.
+      expect(tickResult.activatedScheduled).toBe(0);
+      expect(campaign.status).toBe("SCHEDULED");
+      expect(new Date(campaign.scheduled_at as string).getTime()).toBe(pushedOut.getTime());
+      expect(smtp.messages).toHaveLength(0);
+    } else {
+      // The tick won: it activated (and fully sent) before the reschedule
+      // could apply, so the conditional UPDATE correctly rejected it.
+      expect(rescheduleResponse.status).toBe(409);
+      expect(tickResult.activatedScheduled).toBe(1);
+      expect(campaign.status).toBe("COMPLETED");
+      expect(smtp.messages).toHaveLength(5);
+    }
+    // Whichever side won, no recipient is ever emailed more than once.
+    expect(new Set(smtp.messages.flatMap((m) => m.to)).size).toBe(smtp.messages.length);
   });
 });
 
