@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, Modal, Spinner, api, formatDate, useLoader } from "@/components/ui";
 
 type Audience = { finalRecipients: number; estimatedDuration: string; maxEmailsPerHour: number };
@@ -29,6 +29,18 @@ function isNotInFuture(date: Date): boolean {
   return date.getTime() <= Date.now();
 }
 
+function formatCountdown(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) return `${days} d ${hours} h`;
+  if (hours > 0) return `${hours} h ${minutes} min`;
+  if (minutes > 0) return `${minutes} min ${seconds} s`;
+  return `${seconds} s`;
+}
+
 /**
  * Shown for a SCHEDULED campaign in place of the composer/report: it hasn't
  * started yet, so there is nothing to report on, but the admin still needs to
@@ -50,6 +62,19 @@ export default function CampaignScheduled({
     const current = scheduledAt ? new Date(scheduledAt) : oneHourFromNow();
     return { date: formatDateInput(current), time: formatTimeInput(current) };
   });
+
+  // Set after mount so the server-rendered HTML never disagrees with the client clock.
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    const first = setTimeout(() => setNow(Date.now()), 0);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, []);
+
+  const msUntilStart = scheduledAt && now !== null ? new Date(scheduledAt).getTime() - now : null;
 
   const fetchAudience = useCallback(() => api<Audience>(`/api/campaigns/${campaignId}/audience`), [campaignId]);
   const { data: audience } = useLoader(fetchAudience);
@@ -98,8 +123,28 @@ export default function CampaignScheduled({
         <dl className="mt-3 grid gap-2 text-sm">
           <div className="flex flex-wrap gap-2 border-b pb-2">
             <dt className="hint w-40 shrink-0">Scheduled for</dt>
-            <dd className="flex-1 font-medium">{formatDate(scheduledAt)}</dd>
+            <dd className="flex-1 font-medium">
+              {formatDate(scheduledAt)}
+              {now !== null ? (
+                <span className="hint font-normal"> ({Intl.DateTimeFormat().resolvedOptions().timeZone})</span>
+              ) : null}
+            </dd>
           </div>
+          {msUntilStart !== null && msUntilStart > 0 ? (
+            <div className="flex flex-wrap gap-2 border-b pb-2">
+              <dt className="hint w-40 shrink-0">Starts in</dt>
+              <dd className="flex-1 font-medium tabular-nums">{formatCountdown(msUntilStart)}</dd>
+            </div>
+          ) : msUntilStart !== null ? (
+            <div className="flex flex-wrap gap-2 border-b pb-2">
+              <dt className="hint w-40 shrink-0">Starts in</dt>
+              <dd className="flex-1 font-medium">
+                {msUntilStart > -60_000
+                  ? "Due now — waiting for the worker's next tick"
+                  : `Was due ${formatCountdown(-msUntilStart)} ago — still waiting for the worker`}
+              </dd>
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-2 pb-2">
             <dt className="hint w-40 shrink-0">Recipients</dt>
             <dd className="flex-1">

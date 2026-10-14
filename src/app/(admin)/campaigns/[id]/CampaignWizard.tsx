@@ -398,9 +398,9 @@ function formatDateInput(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** Default date/time inputs to an hour from now, in the browser's own timezone. */
+/** Default date/time inputs to five minutes from now, in the browser's own timezone. */
 function defaultScheduleParts(): { date: string; time: string } {
-  const soon = new Date(Date.now() + 60 * 60 * 1000);
+  const soon = new Date(Date.now() + 5 * 60 * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
   return { date: formatDateInput(soon), time: `${pad(soon.getHours())}:${pad(soon.getMinutes())}` };
 }
@@ -530,7 +530,9 @@ function SendStep({
                 />
               </div>
               <p className="hint">
-                {scheduledDate ? `That's ${scheduledDate.toLocaleString()} your time.` : "Uses your device's timezone."}
+                {scheduledDate
+                  ? `That's ${scheduledDate.toLocaleString()} your time (${Intl.DateTimeFormat().resolvedOptions().timeZone}).`
+                  : "Uses your device's timezone."}
               </p>
             </div>
           ) : null}
