@@ -3,7 +3,6 @@
   "crons": [
     {
       "path": "/api/worker/tick",
-      "//": "Hobby-plan safe: Hobby only allows one cron run per day and rejects the deploy otherwise. The per-minute ticks come from an external scheduler (cron-job.org) calling this same endpoint - see README, Driving the worker from an external scheduler. On Vercel Pro, use '* * * * *' here instead.",
       "schedule": "0 6 * * *"
     }
   ],
